@@ -1,0 +1,1385 @@
+diff --git a/nova/cmd/loadbalancer.py b/nova/cmd/loadbalancer.py
+new file mode 100644
+index 0000000..b089211
+--- /dev/null
++++ b/nova/cmd/loadbalancer.py
+@@ -0,0 +1,41 @@
++# Copyright (c) 2015 Servionica, LLC
++# Copyright 2010 United States Government as represented by the
++# Administrator of the National Aeronautics and Space Administration.
++# All Rights Reserved.
++#
++#    Licensed under the Apache License, Version 2.0 (the "License"); you may
++#    not use this file except in compliance with the License. You may obtain
++#    a copy of the License at
++#
++#         http://www.apache.org/licenses/LICENSE-2.0
++#
++#    Unless required by applicable law or agreed to in writing, software
++#    distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
++#    WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
++#    License for the specific language governing permissions and limitations
++#    under the License.
++
++"""Starter script for Nova LoadBalancer."""
++
++import sys
++
++from nova import config
++from nova import objects
++from nova.openstack.common import log as logging
++from nova.openstack.common.report import guru_meditation_report as gmr
++from nova import service
++from nova import utils
++from nova import version
++
++
++def main():
++    config.parse_args(sys.argv)
++    logging.setup("nova")
++    utils.monkey_patch()
++    objects.register_all()
++
++    gmr.TextGuruMeditation.setup_autorun(version)
++
++    server = service.Service.create(binary='nova-loadbalancer')
++    service.serve(server)
++    service.wait()
+diff --git a/nova/compute/resource_tracker.py b/nova/compute/resource_tracker.py
+index cc1c29e..639ad77 100644
+--- a/nova/compute/resource_tracker.py
++++ b/nova/compute/resource_tracker.py
+@@ -19,6 +19,7 @@ scheduler with useful information about availability through the ComputeNode
+ model.
+ """
+ import copy
++import psutil
+ 
+ from oslo.config import cfg
+ 
+@@ -42,6 +43,7 @@ from nova.scheduler import client as scheduler_client
+ from nova import utils
+ from nova.virt import hardware
+ 
++
+ resource_tracker_opts = [
+     cfg.IntOpt('reserved_host_disk_mb', default=0,
+                help='Amount of disk in MB to reserve for the host'),
+@@ -389,6 +391,16 @@ class ResourceTracker(object):
+ 
+         self._update_available_resource(context, resources)
+ 
++    def _make_compute_stats(self, resources):
++        if self.compute_node:
++            stat = {}
++            stat['memory_used'] = resources['real_memory_mb_used']
++            stat['memory_total'] = resources['memory_mb']
++            stat['cpu_used_percent'] = psutil.cpu_percent()
++            stat['compute_id'] = self.compute_node['id']
++            return stat
++        return None
++
+     @utils.synchronized(COMPUTE_RESOURCE_SEMAPHORE)
+     def _update_available_resource(self, context, resources):
+ 
+@@ -416,8 +428,20 @@ class ResourceTracker(object):
+                             'numa_topology'])
+ 
+         # Now calculate usage based on instance utilization:
+-        self._update_usage_from_instances(context, resources, instances)
+ 
++        self._update_usage_from_instances(context, resources, instances)
++        compute_stats = self._make_compute_stats(resources)
++        LOG.info(_(compute_stats))
++        ins_stats = []
++        for x in instances:
++            ins_stats.append(self.driver.get_info_by_uuid(x['uuid']))
++        drs_stats = {}
++        drs_stats['node'] = compute_stats
++        drs_stats['instances'] = ins_stats
++        if compute_stats:
++            self.conductor_api.compute_node_stats_upsert(context,
++                                                         drs_stats)
++        LOG.info(_(ins_stats))
+         # Grab all in-progress migrations:
+         capi = self.conductor_api
+         migrations = capi.migration_get_in_progress_by_host_and_node(context,
+diff --git a/nova/conductor/api.py b/nova/conductor/api.py
+index b7e3257..48c6991 100644
+--- a/nova/conductor/api.py
++++ b/nova/conductor/api.py
+@@ -173,6 +173,9 @@ class LocalAPI(object):
+         # NOTE(belliott) ignore prune_stats param, it's no longer relevant
+         return self._manager.compute_node_update(context, node, values)
+ 
++    def compute_node_stats_upsert(self, context, values):
++        return self._manager.compute_node_stats_upsert(context, values)
++
+     def compute_node_delete(self, context, node):
+         return self._manager.compute_node_delete(context, node)
+ 
+diff --git a/nova/conductor/manager.py b/nova/conductor/manager.py
+index ed3f5f4..e432b03 100644
+--- a/nova/conductor/manager.py
++++ b/nova/conductor/manager.py
+@@ -311,6 +311,10 @@ class ConductorManager(manager.Manager):
+         result = self.db.compute_node_update(context, node['id'], values)
+         return jsonutils.to_primitive(result)
+ 
++    def compute_node_stats_upsert(self, context, values):
++        result = self.db.compute_node_stats_upsert(context, values)
++        return jsonutils.to_primitive(result)
++
+     def compute_node_delete(self, context, node):
+         result = self.db.compute_node_delete(context, node['id'])
+         return jsonutils.to_primitive(result)
+diff --git a/nova/conductor/rpcapi.py b/nova/conductor/rpcapi.py
+index 6bb583d..b4bc696 100644
+--- a/nova/conductor/rpcapi.py
++++ b/nova/conductor/rpcapi.py
+@@ -274,6 +274,10 @@ class ConductorAPI(object):
+         return cctxt.call(context, 'compute_node_update',
+                           node=node_p, values=values)
+ 
++    def compute_node_stats_upsert(self, context, values):
++        cctxt = self.client.prepare()
++        return cctxt.call(context, 'compute_node_stats_upsert', values=values)
++
+     def compute_node_delete(self, context, node):
+         node_p = jsonutils.to_primitive(node)
+         cctxt = self.client.prepare()
+diff --git a/nova/db/api.py b/nova/db/api.py
+index ab8b689..effa2e0 100644
+--- a/nova/db/api.py
++++ b/nova/db/api.py
+@@ -181,7 +181,8 @@ def compute_node_get_by_service_id(context, service_id):
+     return IMPL.compute_node_get_by_service_id(context, service_id)
+ 
+ 
+-def compute_node_get_all(context, no_date_fields=False):
++def compute_node_get_all(context, no_date_fields=False,
++                         hypervisor_hostname=None):
+     """Get all computeNodes.
+ 
+     :param context: The security context
+@@ -193,7 +194,8 @@ def compute_node_get_all(context, no_date_fields=False):
+     :returns: List of dictionaries each containing compute node properties,
+               including corresponding service
+     """
+-    return IMPL.compute_node_get_all(context, no_date_fields)
++    return IMPL.compute_node_get_all(context, no_date_fields,
++                                     hypervisor_hostname=None)
+ 
+ 
+ def compute_node_search_by_hypervisor(context, hypervisor_match):
+@@ -235,6 +237,18 @@ def compute_node_update(context, compute_id, values):
+     return IMPL.compute_node_update(context, compute_id, values)
+ 
+ 
++def compute_node_stats_upsert(context, values):
++    return IMPL.compute_node_stats_upsert(context, values)
++
++
++def get_compute_node_stats(context):
++    return IMPL.get_compute_node_stats(context)
++
++
++def get_instances_stat(context, host):
++    return IMPL.get_instances_stat(context, host)
++
++
+ def compute_node_delete(context, compute_id):
+     """Delete a compute node from the database.
+ 
+diff --git a/nova/db/sqlalchemy/api.py b/nova/db/sqlalchemy/api.py
+index 6f05fb9..583c65b 100644
+--- a/nova/db/sqlalchemy/api.py
++++ b/nova/db/sqlalchemy/api.py
+@@ -558,7 +558,7 @@ def compute_node_get_by_service_id(context, service_id):
+ 
+ 
+ @require_admin_context
+-def compute_node_get_all(context, no_date_fields):
++def compute_node_get_all(context, no_date_fields, hypervisor_host=None):
+ 
+     # NOTE(msdubov): Using lower-level 'select' queries and joining the tables
+     #                manually here allows to gain 3x speed-up and to have 5x
+@@ -577,9 +577,16 @@ def compute_node_get_all(context, no_date_fields):
+         def filter_columns(table):
+             return [c for c in table.c if c.name not in redundant_columns]
+ 
+-        compute_node_query = sql.select(filter_columns(compute_node)).\
+-                                where(compute_node.c.deleted == 0).\
+-                                order_by(compute_node.c.service_id)
++        if hypervisor_host:
++            compute_node_query = sql.select(filter_columns(compute_node)).\
++                where(
++                      (compute_node.c.deleted == 0) &
++                      (compute_node.c.hypervisor_hostname == hypervisor_host)
++                     ).order_by(compute_node.c.service_id)
++        else:
++            compute_node_query = sql.select(filter_columns(compute_node)).\
++                where(compute_node.c.deleted == 0)\
++                .order_by(compute_node.c.service_id)
+         compute_node_rows = conn.execute(compute_node_query).fetchall()
+ 
+         service_query = sql.select(filter_columns(service)).\
+@@ -647,6 +654,56 @@ def compute_node_update(context, compute_id, values):
+ 
+ 
+ @require_admin_context
++@_retry_on_deadlock
++def compute_node_stats_upsert(context, values):
++    session = get_session()
++    compute_node = values['node']
++    instances = values['instances']
++    with session.begin():
++        compute_stats = model_query(context, models.ComputeNodeStats,
++                                    session=session).filter_by(
++            compute_id=compute_node['compute_id']).first()
++        if compute_stats:
++            compute_stats.update(compute_node)
++        else:
++            compute_stats = models.ComputeNodeStats()
++            compute_stats.update(compute_node)
++            compute_stats.save(session=session)
++        for x in instances:
++            instance = model_query(context, models.InstanceStats,
++                                   session=session)\
++                .filter(
++                    models.InstanceStats.instance_uuid == x['instance_uuid'])\
++                .first()
++            if instance:
++                instance['prev_cpu_time'] = instance['cpu_time']
++                instance['prev_updated_at'] = instance['updated_at']
++                instance['prev_block_dev_iops'] = instance['block_dev_iops']
++                instance.update(x)
++            else:
++                instance_stats = models.InstanceStats()
++                instance_stats.update(x)
++                instance_stats.save(session=session)
++    return compute_stats
++
++
++@require_admin_context
++def get_compute_node_stats(context):
++    return model_query(context, models.ComputeNodeStats).\
++        join(models.ComputeNode).filter(models.ComputeNode.deleted == 0)\
++        .options(joinedload('compute_node')).all()
++
++
++@require_admin_context
++def get_instances_stat(context, host):
++    return model_query(context, models.InstanceStats).\
++        join(models.Instance,
++             models.InstanceStats.instance_uuid == models.Instance.uuid)\
++        .filter(models.Instance.host == host).options(joinedload('instance'))\
++        .all()
++
++
++@require_admin_context
+ def compute_node_delete(context, compute_id):
+     """Delete a ComputeNode record."""
+     session = get_session()
+diff --git a/nova/db/sqlalchemy/models.py b/nova/db/sqlalchemy/models.py
+index 6eaa21e..954f55a 100644
+--- a/nova/db/sqlalchemy/models.py
++++ b/nova/db/sqlalchemy/models.py
+@@ -146,6 +146,21 @@ class ComputeNode(BASE, NovaBase):
+     numa_topology = Column(Text)
+ 
+ 
++class ComputeNodeStats(BASE, NovaBase):
++    __tablename__ = 'compute_node_stats'
++    __table_args__ = ()
++    id = Column(Integer, primary_key=True)
++    compute_id = Column(Integer, ForeignKey('compute_nodes.id'),
++                        nullable=False)
++    memory_used = Column(Integer, nullable=False)
++    memory_total = Column(Integer, nullable=False)
++    cpu_used_percent = Column(Integer, nullable=True)
++    compute_node = orm.relationship(ComputeNode,
++                                    backref=orm.backref('compute_stats'),
++                                    foreign_keys=compute_id,
++                                    primaryjoin=compute_id == ComputeNode.id)
++
++
+ class Certificate(BASE, NovaBase):
+     """Represents a x509 certificate."""
+     __tablename__ = 'certificates'
+@@ -303,6 +318,25 @@ class Instance(BASE, NovaBase):
+     cleaned = Column(Integer, default=0)
+ 
+ 
++class InstanceStats(BASE, NovaBase):
++    __tablename__ = 'instance_stats'
++    __table_args__ = ()
++    id = Column(Integer, primary_key=True)
++    instance_uuid = Column(Text, ForeignKey('instances.uuid'))
++    libvirt_id = Column(Integer)
++    cpu_time = Column(BigInteger)
++    prev_cpu_time = Column(BigInteger)
++    prev_updated_at = Column(DateTime)
++    mem = Column(Integer)
++    block_dev_iops = Column(BigInteger)
++    prev_block_dev_iops = Column(BigInteger)
++    instance = orm.relationship(Instance,
++                                backref=orm.backref('instance_stats',
++                                                    uselist=False),
++                                foreign_keys=instance_uuid,
++                                primaryjoin=instance_uuid == Instance.uuid)
++
++
+ class InstanceInfoCache(BASE, NovaBase):
+     """Represents a cache of information about an instance
+     """
+diff --git a/nova/loadbalancer/__init__.py b/nova/loadbalancer/__init__.py
+new file mode 100644
+index 0000000..36038ea
+--- /dev/null
++++ b/nova/loadbalancer/__init__.py
+@@ -0,0 +1,19 @@
++# Copyright (c) 2015 Servionica, LLC
++# All Rights Reserved.
++#
++#    Licensed under the Apache License, Version 2.0 (the "License"); you may
++#    not use this file except in compliance with the License. You may obtain
++#    a copy of the License at
++#
++#         http://www.apache.org/licenses/LICENSE-2.0
++#
++#    Unless required by applicable law or agreed to in writing, software
++#    distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
++#    WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
++#    License for the specific language governing permissions and limitations
++#    under the License.
++
++
++def API():
++    import nova.loadbalancer.load_balancer
++    return nova.loadbalancer.load_balancer.LoadBalancer()
+diff --git a/nova/loadbalancer/balancer/__init__.py b/nova/loadbalancer/balancer/__init__.py
+new file mode 100644
+index 0000000..e69de29
+diff --git a/nova/loadbalancer/balancer/base.py b/nova/loadbalancer/balancer/base.py
+new file mode 100644
+index 0000000..2be386e
+--- /dev/null
++++ b/nova/loadbalancer/balancer/base.py
+@@ -0,0 +1,74 @@
++# Copyright (c) 2015 Servionica, LLC
++# All Rights Reserved.
++#
++#    Licensed under the Apache License, Version 2.0 (the "License"); you may
++#    not use this file except in compliance with the License. You may obtain
++#    a copy of the License at
++#
++#         http://www.apache.org/licenses/LICENSE-2.0
++#
++#    Unless required by applicable law or agreed to in writing, software
++#    distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
++#    WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
++#    License for the specific language governing permissions and limitations
++#    under the License.
++
++from oslo.config import cfg
++
++from nova.compute import api as compute_api
++from nova.loadbalancer import utils as lb_utils
++from nova.openstack.common import importutils
++from nova.scheduler import filters
++
++
++lb_opts = [
++    cfg.ListOpt('load_balancer_default_filters',
++                default=[
++                    'AggregateInstanceExtraSpecsFilter',
++                    'AvailabilityZoneFilter',
++                    'RealRamFilter',
++                    'ComputeFilter',
++                    'ImagePropertiesFilter',
++                    'ServerGroupAntiAffinityFilter',
++                    'ServerGroupAffinityFilter',
++                ],
++                help='Which filter class names to use for filtering hosts '
++                'when not specified in the request.')
++]
++
++CONF = cfg.CONF
++CONF.register_opts(lb_opts, 'loadbalancer')
++CONF.import_opt('scheduler_host_manager', 'nova.scheduler.driver')
++
++
++class BaseBalancer(object):
++
++    def __init__(self, *args, **kwargs):
++        super(BaseBalancer, self).__init__(*args, **kwargs)
++        self.host_manager = importutils.import_object(
++            CONF.scheduler_host_manager)
++        self.filter_handler = filters.HostFilterHandler()
++        self.compute_api = compute_api.API()
++
++    def balance(self, context, **kwargs):
++        pass
++
++    def filter_hosts(self, context, chosen_instance, nodes, host=None):
++        filter_properties = lb_utils.build_filter_properties(context,
++                                                             chosen_instance,
++                                                             nodes)
++        classes = self.host_manager.choose_host_filters(
++            CONF.loadbalancer.load_balancer_default_filters)
++        # If hypervisor_hostname is set, query returns only specified host.
++        hosts = self.host_manager.get_all_host_states(context,
++                                                      hypervisor_hostname=host)
++        filtered = self.filter_handler.get_filtered_objects(classes,
++                                                            hosts,
++                                                            filter_properties)
++        return filtered, filter_properties
++
++    def migrate(self, context, instance_uuid, hostname):
++        instance = lb_utils.get_instance_object(context,
++                                                instance_uuid)
++        self.compute_api.live_migrate(lb_utils.get_context(), instance,
++                                      False, False, hostname)
+diff --git a/nova/loadbalancer/balancer/classic.py b/nova/loadbalancer/balancer/classic.py
+new file mode 100644
+index 0000000..9c9af4c
+--- /dev/null
++++ b/nova/loadbalancer/balancer/classic.py
+@@ -0,0 +1,146 @@
++# Copyright (c) 2015 Servionica, LLC
++# All Rights Reserved.
++#
++#    Licensed under the Apache License, Version 2.0 (the "License"); you may
++#    not use this file except in compliance with the License. You may obtain
++#    a copy of the License at
++#
++#         http://www.apache.org/licenses/LICENSE-2.0
++#
++#    Unless required by applicable law or agreed to in writing, software
++#    distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
++#    WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
++#    License for the specific language governing permissions and limitations
++#    under the License.
++
++from oslo.config import cfg
++
++from nova import db
++from nova.loadbalancer import utils as lb_utils
++from nova.loadbalancer.balancer.base import BaseBalancer
++from nova.i18n import _
++from nova.openstack.common import log as logging
++
++
++lb_opts = [
++    cfg.FloatOpt('cpu_weight',
++                 default=1.0,
++                 help='CPU weight'),
++    cfg.FloatOpt('memory_weight',
++                 default=1.0,
++                 help='Memory weight'),
++    cfg.FloatOpt('io_weight',
++                 default=1.0,
++                 help='IO weight'),
++    cfg.FloatOpt('compute_cpu_weight',
++                 default=1.0,
++                 help='CPU weight'),
++    cfg.FloatOpt('compute_memory_weight',
++                 default=1.0,
++                 help='Memory weight')
++]
++
++
++CONF = cfg.CONF
++LOG = logging.getLogger(__name__)
++CONF.register_opts(lb_opts, 'loadbalancer_classic')
++CONF.import_opt('scheduler_host_manager', 'nova.scheduler.driver')
++
++
++class Classic(BaseBalancer):
++    def __init__(self, *args, **kwargs):
++        super(Classic, self).__init__(*args, **kwargs)
++
++    def _weight_hosts(self, normalized_hosts):
++        weighted_hosts = []
++        compute_cpu_weight = CONF.loadbalancer_classic.compute_cpu_weight
++        compute_memory_weight = CONF.loadbalancer_classic.compute_memory_weight
++        for host in normalized_hosts:
++            weighted_host = {'host': host['host']}
++            cpu_used = host['cpu_used_percent']
++            memory_used = host['memory_used']
++            weight = compute_cpu_weight * cpu_used + \
++                compute_memory_weight * memory_used
++            weighted_host['weight'] = weight
++            weighted_hosts.append(weighted_host)
++        return sorted(weighted_hosts,
++                      key=lambda x: x['weight'], reverse=False)
++
++    def _weight_instances(self, normalized_instances, extra_info=None):
++        weighted_instances = []
++        cpu_weight = CONF.loadbalancer_classic.cpu_weight
++        if extra_info.get('k_cpu'):
++            cpu_weight = extra_info['k_cpu']
++        memory_weight = CONF.loadbalancer_classic.memory_weight
++        io_weight = CONF.loadbalancer_classic.io_weight
++        for instance in normalized_instances:
++            weighted_instance = {'uuid': instance['uuid']}
++            weight = cpu_weight * instance['cpu'] + \
++                memory_weight * instance['memory'] + \
++                io_weight * instance['io']
++            weighted_instance['weight'] = weight
++            weighted_instances.append(weighted_instance)
++        return sorted(weighted_instances,
++                      key=lambda x: x['weight'], reverse=False)
++
++    def _choose_instance_to_migrate(self, instances, extra_info=None):
++        instances_params = []
++        for i in instances:
++            instance_resources = lb_utils.get_instance_resources(i)
++            if instance_resources:
++                instances_params.append(instance_resources)
++        LOG.debug(_(instances_params))
++        normalized_instances = lb_utils.normalize_params(instances_params)
++        LOG.info(_(normalized_instances))
++        if extra_info.get('cpu_overload'):
++            normalized_instances = filter(lambda x: x['memory'] == 0,
++                                          normalized_instances)
++            extra_info['k_cpu'] = -1
++        weighted_instances = self._weight_instances(normalized_instances,
++                                                    extra_info)
++        LOG.info(_(weighted_instances))
++        chosen_instance = weighted_instances[0]
++        chosen_instance['resources'] = filter(
++            lambda x: x['uuid'] == chosen_instance['uuid'],
++            instances_params)[0]
++        return chosen_instance
++
++    def _choose_host_to_migrate(self, context, chosen_instance, nodes):
++        filtered, filter_properties = self.filter_hosts(context,
++                                                        chosen_instance, nodes)
++        if not filtered:
++            return
++        nodes = filter_properties['nodes']
++        # 'memory_total' field shouldn't be normalized.
++        for n in nodes:
++            del n['memory_total']
++        filtered_nodes = [
++            n for n in nodes
++            for host in filtered if n['host'] == host.hypervisor_hostname]
++        normalized_hosts = lb_utils.normalize_params(filtered_nodes, 'host')
++        weighted_hosts = self._weight_hosts(normalized_hosts)
++        return weighted_hosts[0]
++
++    def _classic(self, context, **kwargs):
++        node = kwargs.get('node')
++        nodes = kwargs.get('nodes')
++        extra_info = kwargs.get('extra_info')
++        instances = db.get_instances_stat(
++            context,
++            node.compute_node.hypervisor_hostname)
++        chosen_instance = self._choose_instance_to_migrate(instances,
++                                                           extra_info)
++        LOG.debug(_(chosen_instance))
++        chosen_host = self._choose_host_to_migrate(context,
++                                                   chosen_instance,
++                                                   nodes)
++        selected_pair = {chosen_host['host']: chosen_instance['uuid']}
++        LOG.debug(_(selected_pair))
++        if node.compute_node.hypervisor_hostname == chosen_host['host']:
++            LOG.debug("Source host is optimal."
++                      " Live Migration will not be perfomed.")
++            return
++        self.migrate(context, chosen_instance['uuid'], chosen_host['host'])
++
++    def balance(self, context, **kwargs):
++        return self._classic(context, **kwargs)
+diff --git a/nova/loadbalancer/balancer/minimizeSD.py b/nova/loadbalancer/balancer/minimizeSD.py
+new file mode 100644
+index 0000000..4b50cbe1
+--- /dev/null
++++ b/nova/loadbalancer/balancer/minimizeSD.py
+@@ -0,0 +1,106 @@
++# Copyright (c) 2015 Servionica, LLC
++# All Rights Reserved.
++#
++#    Licensed under the Apache License, Version 2.0 (the "License"); you may
++#    not use this file except in compliance with the License. You may obtain
++#    a copy of the License at
++#
++#         http://www.apache.org/licenses/LICENSE-2.0
++#
++#    Unless required by applicable law or agreed to in writing, software
++#    distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
++#    WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
++#    License for the specific language governing permissions and limitations
++#    under the License.
++
++
++from nova import db
++from nova.loadbalancer import utils as lb_utils
++from nova.loadbalancer.balancer.base import BaseBalancer
++from nova.i18n import _
++from nova.openstack.common import log as logging
++
++from copy import deepcopy
++from oslo.config import cfg
++
++
++lb_opts = [
++    cfg.FloatOpt('cpu_weight',
++                 default=1.0,
++                 help='LoadBalancer CPU weight.'),
++    cfg.FloatOpt('memory_weight',
++                 default=1.0,
++                 help='LoadBalancer Memory weight.')
++]
++
++LOG = logging.getLogger(__name__)
++CONF = cfg.CONF
++CONF.register_opts(lb_opts, 'loadbalancer_minimizeSD')
++
++
++class MinimizeSD(BaseBalancer):
++
++    def __init__(self, *args, **kwargs):
++        super(MinimizeSD, self).__init__(*args, **kwargs)
++        self.cpu_weight = CONF.loadbalancer_minimizeSD.cpu_weight
++        self.memory_weight = CONF.loadbalancer_minimizeSD.memory_weight
++
++    def _simulate_migration(self, instance, node, host_loads, compute_nodes):
++        source_host = instance.instance['host']
++        target_host = node.compute_node.hypervisor_hostname
++        vm_ram = instance['mem']
++        vm_cpu = lb_utils.calculate_cpu(instance, compute_nodes)
++        _host_loads = deepcopy(host_loads)
++        LOG.debug(_(_host_loads))
++        _host_loads[source_host]['mem'] -= vm_ram
++        _host_loads[source_host]['cpu'] -= vm_cpu
++        _host_loads[target_host]['mem'] += vm_ram
++        _host_loads[target_host]['cpu'] += vm_cpu
++        _host_loads = lb_utils.calculate_host_loads(compute_nodes, _host_loads)
++        ram_sd = lb_utils.calculate_sd(_host_loads, 'mem')
++        cpu_sd = lb_utils.calculate_sd(_host_loads, 'cpu')
++        return {'cpu_sd': cpu_sd*self.cpu_weight,
++                'ram_sd': ram_sd*self.memory_weight,
++                'total_sd': cpu_sd*self.cpu_weight + ram_sd*self.memory_weight}
++
++    def min_sd(self, context, **kwargs):
++        compute_nodes = kwargs.get('nodes')
++        instances = []
++        for node in compute_nodes:
++            node_instances = db.get_instances_stat(
++                context,
++                node.compute_node.hypervisor_hostname)
++            instances.extend(node_instances)
++        host_loads = lb_utils.fill_compute_stats(instances, compute_nodes)
++        LOG.debug(_(host_loads))
++        vm_host_map = []
++        for instance in instances:
++            for node in compute_nodes:
++                h_hostname = node.compute_node.hypervisor_hostname
++                # Source host shouldn't be use.
++                if instance.instance['host'] != h_hostname:
++                    sd = self._simulate_migration(instance, node, host_loads,
++                                                  compute_nodes)
++                    vm_host_map.append({'host': h_hostname,
++                                        'vm': instance['instance_uuid'],
++                                        'sd': sd})
++        vm_host_map = sorted(vm_host_map, key=lambda x: x['sd']['total_sd'])
++        LOG.debug(_(vm_host_map))
++        for vm_host in vm_host_map:
++            instance = filter(lambda x: x['instance_uuid'] == vm_host['vm'],
++                              instances)[0]
++            instance_resources = lb_utils.get_instance_resources(instance)
++            if instance_resources:
++                filter_instance = {'uuid': instance['instance_uuid'],
++                                   'resources': instance_resources}
++                filtered = self.filter_hosts(context, filter_instance,
++                                             compute_nodes,
++                                             host=vm_host['host'])
++                if not filtered[0]:
++                    continue
++                self.migrate(context, instance['instance_uuid'],
++                             vm_host['host'])
++                return
++
++    def balance(self, context, **kwargs):
++        return self.min_sd(context, **kwargs)
+diff --git a/nova/loadbalancer/load_balancer.py b/nova/loadbalancer/load_balancer.py
+new file mode 100644
+index 0000000..0e937a0
+--- /dev/null
++++ b/nova/loadbalancer/load_balancer.py
+@@ -0,0 +1,85 @@
++# Copyright (c) 2015 Servionica, LLC
++# All Rights Reserved.
++#
++#    Licensed under the Apache License, Version 2.0 (the "License"); you may
++#    not use this file except in compliance with the License. You may obtain
++#    a copy of the License at
++#
++#         http://www.apache.org/licenses/LICENSE-2.0
++#
++#    Unless required by applicable law or agreed to in writing, software
++#    distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
++#    WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
++#    License for the specific language governing permissions and limitations
++#    under the License.
++
++from oslo.config import cfg
++from nova import manager
++from nova.openstack.common import log as logging
++from nova.openstack.common import periodic_task
++from stevedore import driver
++
++
++lb_opts = [
++    cfg.StrOpt('threshold_class',
++               default='standart_deviation',
++               help='Threshold class'),
++    cfg.StrOpt('balancer_class',
++               default='classic',
++               help='Balancer class')
++]
++
++CONF = cfg.CONF
++LOG = logging.getLogger(__name__)
++CONF.register_opts(lb_opts, 'loadbalancer')
++CONF.import_opt('scheduler_host_manager', 'nova.scheduler.driver')
++
++
++SUPPORTED_THRESHOLD_CLASSES = [
++    'step_threshold',
++    'standart_deviation'
++]
++
++
++SUPPORTED_BALANCER_CLASSES = [
++    'classic',
++    'minimizeSD'
++]
++
++
++def get_balancer_class(class_name):
++    if class_name in SUPPORTED_BALANCER_CLASSES:
++        namespace = 'nova.loadbalancer.balancer'
++        mgr = driver.DriverManager(namespace, class_name)
++        return mgr.driver()
++    raise Exception('Setted up class is not supported.')
++
++
++def get_threshold_class(class_name):
++    if class_name in SUPPORTED_THRESHOLD_CLASSES:
++        namespace = 'nova.loadbalancer.threshold'
++        mgr = driver.DriverManager(namespace, class_name)
++        return mgr.driver()
++    raise Exception('Setted up class is not supported.')
++
++
++class LoadBalancer(manager.Manager):
++    def __init__(self, *args, **kwargs):
++        super(LoadBalancer, self).__init__(service_name='loadbalancer',
++                                           *args, **kwargs)
++        self.threshold_class = get_threshold_class(
++            CONF.loadbalancer.threshold_class)
++        self.balancer_class = get_balancer_class(
++            CONF.loadbalancer.balancer_class)
++
++    def _balancer(self, context):
++        node, nodes, extra_info = self.threshold_class.indicate(context)
++        if node:
++            return self.balancer_class.balance(context,
++                                               node=node,
++                                               nodes=nodes,
++                                               extra_info=extra_info)
++
++    @periodic_task.periodic_task
++    def indicate_threshold(self, context):
++        return self._balancer(context)
+diff --git a/nova/loadbalancer/threshold/__init__.py b/nova/loadbalancer/threshold/__init__.py
+new file mode 100644
+index 0000000..e69de29
+diff --git a/nova/loadbalancer/threshold/base.py b/nova/loadbalancer/threshold/base.py
+new file mode 100644
+index 0000000..e21e747
+--- /dev/null
++++ b/nova/loadbalancer/threshold/base.py
+@@ -0,0 +1,22 @@
++# Copyright (c) 2015 Servionica, LLC
++# All Rights Reserved.
++#
++#    Licensed under the Apache License, Version 2.0 (the "License"); you may
++#    not use this file except in compliance with the License. You may obtain
++#    a copy of the License at
++#
++#         http://www.apache.org/licenses/LICENSE-2.0
++#
++#    Unless required by applicable law or agreed to in writing, software
++#    distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
++#    WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
++#    License for the specific language governing permissions and limitations
++#    under the License.
++
++
++class Base(object):
++    def __init__(self):
++        pass
++
++    def indicate(self, context):
++        raise NotImplementedError()
+diff --git a/nova/loadbalancer/threshold/standart_deviation.py b/nova/loadbalancer/threshold/standart_deviation.py
+new file mode 100644
+index 0000000..e073310
+--- /dev/null
++++ b/nova/loadbalancer/threshold/standart_deviation.py
+@@ -0,0 +1,80 @@
++# Copyright (c) 2015 Servionica, LLC
++# All Rights Reserved.
++#
++#    Licensed under the Apache License, Version 2.0 (the "License"); you may
++#    not use this file except in compliance with the License. You may obtain
++#    a copy of the License at
++#
++#         http://www.apache.org/licenses/LICENSE-2.0
++#
++#    Unless required by applicable law or agreed to in writing, software
++#    distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
++#    WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
++#    License for the specific language governing permissions and limitations
++#    under the License.
++
++
++from nova import db
++from nova.i18n import _
++from nova.loadbalancer.threshold import base
++from nova.loadbalancer import utils
++from nova.openstack.common import log as logging
++
++from oslo.config import cfg
++
++
++lb_opts = [
++    cfg.FloatOpt('threshold_cpu',
++                 default=0.05,
++                 help='Standart Deviation Threshold'),
++    cfg.FloatOpt('threshold_memory',
++                 default=0.3,
++                 help='Standart Deviation Threshold')
++]
++
++
++LOG = logging.getLogger(__name__)
++CONF = cfg.CONF
++CONF.register_opts(lb_opts, 'loadbalancer_standart_deviation')
++
++
++class Standart_Deviation(base.Base):
++
++    def __init__(self):
++        pass
++
++    def indicate(self, context):
++        cpu_threshold = CONF.loadbalancer_standart_deviation.threshold_cpu
++        mem_threshold = CONF.loadbalancer_standart_deviation.threshold_memory
++        compute_nodes = db.get_compute_node_stats(context)
++        instances = []
++        # TODO: Make only one query that returns all instances placed on active
++        # hosts.
++        for node in compute_nodes:
++            node_instances = db.get_instances_stat(
++                context,
++                node.compute_node.hypervisor_hostname)
++            instances.extend(node_instances)
++        compute_stats = utils.fill_compute_stats(instances, compute_nodes)
++        host_loads = utils.calculate_host_loads(compute_nodes, compute_stats)
++        LOG.debug(_(host_loads))
++        ram_sd = utils.calculate_sd(host_loads, 'mem')
++        cpu_sd = utils.calculate_sd(host_loads, 'cpu')
++        if cpu_sd > cpu_threshold or ram_sd > mem_threshold:
++            extra_info = {'cpu_overload': False}
++            if cpu_sd > cpu_threshold:
++                overloaded_host = sorted(host_loads,
++                                         key=lambda x: host_loads[x]['cpu'],
++                                         reverse=True)[0]
++                extra_info['cpu_overload'] = True
++            else:
++                overloaded_host = sorted(host_loads,
++                                         key=lambda x: host_loads[x]['mem'],
++                                         reverse=True)[0]
++            host = filter(
++                lambda x:
++                x.compute_node.hypervisor_hostname == overloaded_host,
++                compute_nodes)[0]
++            LOG.debug(_(host))
++            return host, compute_nodes, extra_info
++        return [], [], {}
+diff --git a/nova/loadbalancer/threshold/step_threshold.py b/nova/loadbalancer/threshold/step_threshold.py
+new file mode 100644
+index 0000000..6dc3d12
+--- /dev/null
++++ b/nova/loadbalancer/threshold/step_threshold.py
+@@ -0,0 +1,60 @@
++# Copyright (c) 2015 Servionica, LLC
++# All Rights Reserved.
++#
++#    Licensed under the Apache License, Version 2.0 (the "License"); you may
++#    not use this file except in compliance with the License. You may obtain
++#    a copy of the License at
++#
++#         http://www.apache.org/licenses/LICENSE-2.0
++#
++#    Unless required by applicable law or agreed to in writing, software
++#    distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
++#    WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
++#    License for the specific language governing permissions and limitations
++#    under the License.
++
++
++from nova import db
++from nova.i18n import _
++from nova.loadbalancer.threshold import base
++from nova.openstack.common import log as logging
++
++from oslo.config import cfg
++
++
++lb_opts = [
++    cfg.IntOpt('cpu_threshold',
++               default=70,
++               help='LoadBalancer CPU threshold, percent'),
++    cfg.IntOpt('memory_threshold',
++               default=70,
++               help='LoadBalancer Memory threshold, percent')
++]
++
++
++LOG = logging.getLogger(__name__)
++CONF = cfg.CONF
++CONF.register_opts(lb_opts, 'loadbalancer_step_threshold')
++
++
++class Step_Threshold(base.Base):
++    def __init__(self):
++        pass
++
++    def indicate(self, context):
++        compute_nodes = db.get_compute_node_stats(context)
++        cpu_td = CONF.loadbalancer_step_threshold.cpu_threshold
++        memory_td = CONF.loadbalancer_step_threshold.memory_threshold
++        LOG.debug(_(cpu_td))
++        LOG.debug(_(memory_td))
++        for node in compute_nodes:
++            cpu_used_percent = node['cpu_used_percent']
++            memory_used = node['memory_used']
++            memory_used_percent = round(
++                (float(memory_used) / float(node['memory_total'])) * 100.00, 0
++            )
++            LOG.debug(_(cpu_used_percent))
++            LOG.debug(_(memory_used_percent))
++            if cpu_used_percent > cpu_td or memory_used_percent > memory_td:
++                return node, compute_nodes, {}
++        return [], [], {}
+diff --git a/nova/loadbalancer/utils.py b/nova/loadbalancer/utils.py
+new file mode 100644
+index 0000000..c000a97
+--- /dev/null
++++ b/nova/loadbalancer/utils.py
+@@ -0,0 +1,217 @@
++# Copyright (c) 2015 Servionica, LLC
++# All Rights Reserved.
++#
++#    Licensed under the Apache License, Version 2.0 (the "License"); you may
++#    not use this file except in compliance with the License. You may obtain
++#    a copy of the License at
++#
++#         http://www.apache.org/licenses/LICENSE-2.0
++#
++#    Unless required by applicable law or agreed to in writing, software
++#    distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
++#    WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
++#    License for the specific language governing permissions and limitations
++#    under the License.
++
++
++from keystoneclient.v2_0 import client
++
++from nova import context as nova_context
++from nova import image
++from nova import objects
++from nova.i18n import _
++from nova.openstack.common import log as logging
++from nova.scheduler import utils
++
++from oslo.config import cfg
++
++import math
++
++auth_options = [
++    cfg.StrOpt('admin_user',
++               default='nova',
++               help='Keystone account username'),
++    cfg.StrOpt('admin_password',
++               default='nova',
++               help='Keystone account password'),
++    cfg.StrOpt('admin_tenant_name',
++               default='service',
++               help='Tenant name'),
++    cfg.StrOpt('auth_uri',
++               default='http://controller:5000/v2.0',
++               help='Public Identity API endpoint'),
++]
++
++
++CONF = cfg.CONF
++CONF.register_opts(auth_options, 'keystone_authtoken')
++LOG = logging.getLogger(__name__)
++
++nova_client = client.Client(
++    username=CONF.keystone_authtoken.admin_user,
++    password=CONF.keystone_authtoken.admin_password,
++    tenant_name=CONF.keystone_authtoken.admin_tenant_name,
++    auth_url=CONF.keystone_authtoken.auth_uri
++)
++
++image_api = image.API()
++
++
++def get_context():
++    creds = nova_client
++    s_catalog = creds.service_catalog.catalog['serviceCatalog']
++    ctx = nova_context.RequestContext(user_id=creds.user_id,
++                                      is_admin=True,
++                                      project_id=creds.project_id,
++                                      user_name=creds.username,
++                                      project_name=creds.project_name,
++                                      roles=['admin'],
++                                      auth_token=creds.auth_token,
++                                      remote_address=None,
++                                      service_catalog=s_catalog,
++                                      request_id=None)
++    return ctx
++
++
++def _get_image(image_uuid):
++    ctx = get_context()
++    return (image_api.get(ctx, image_uuid), ctx)
++
++
++def get_instance_object(context, uuid):
++    expected_attrs = ['info_cache', 'security_groups',
++                      'system_metadata']
++    return objects.Instance.get_by_uuid(context, uuid, expected_attrs)
++
++
++def get_instance_resources(i):
++    if i.instance['task_state'] != 'migrating' and i['prev_cpu_time']:
++        instance_resources = {'uuid': i.instance['uuid']}
++        instance_resources['cpu'] = calculate_cpu(i)
++        instance_resources['memory'] = i['mem']
++        instance_resources['io'] = i[
++            'block_dev_iops'] - i['prev_block_dev_iops']
++        return instance_resources
++    return None
++
++
++def build_filter_properties(context, chosen_instance, nodes):
++    instance = get_instance_object(context, chosen_instance['uuid'])
++    image, ctx = _get_image(instance.get('image_ref'))
++    req_spec = utils.build_request_spec(ctx, image, [instance])
++    filter_properties = {'context': ctx}
++    instance_type = req_spec.get('instance_type')
++    project_id = req_spec['instance_properties']['project_id']
++    instance_resources = chosen_instance['resources']
++    dict_nodes = []
++    for n in nodes:
++        dict_node = {'memory_total': n['memory_total'],
++                     'memory_used': n['memory_used'],
++                     'cpu_used_percent': n['cpu_used_percent'],
++                     'host': n.compute_node.hypervisor_hostname}
++        dict_nodes.append(dict_node)
++    filter_properties.update({'instance_type': instance_type,
++                              'request_spec': req_spec,
++                              'project_id': project_id,
++                              'instance_resources': instance_resources,
++                              'nodes': dict_nodes})
++    return filter_properties
++
++
++def normalize_params(params, k='uuid'):
++    max_values = {}
++    min_values = {}
++    normalized_params = []
++    for param in params:
++        for key in param:
++            if key != k:
++                if max_values.get(key):
++                    if max_values[key] < param[key]:
++                        max_values[key] = param[key]
++                else:
++                    max_values[key] = param[key]
++                if min_values.get(key):
++                    if min_values[key] > param[key]:
++                        min_values[key] = param[key]
++                else:
++                    min_values[key] = param[key]
++    LOG.info(_(max_values))
++    LOG.info(_(min_values))
++    LOG.info(_(params))
++    for param in params:
++        norm_ins = {}
++        for key in param:
++            if key != k:
++                if len(params) == 1 or max_values[key] == min_values[key]:
++                    delta_key = 1
++                else:
++                    delta_key = max_values[key] - min_values[key]
++                norm_ins[key] = float(
++                    (param[key] - min_values[key])) / float((delta_key))
++                norm_ins[k] = param[k]
++        normalized_params.append(norm_ins)
++    return normalized_params
++
++
++def fill_compute_stats(instances, compute_nodes):
++    host_loads = {}
++    for instance in instances:
++            cpu_util = calculate_cpu(instance, compute_nodes)
++            if instance.instance['host'] in host_loads:
++                host_loads[instance.instance['host']]['mem'] += instance['mem']
++                host_loads[instance.instance['host']]['cpu'] += cpu_util
++            else:
++                host_loads[instance.instance['host']] = {}
++                host_loads[instance.instance['host']]['mem'] = instance['mem']
++                host_loads[instance.instance['host']]['cpu'] = cpu_util
++    for node in compute_nodes:
++        if node.compute_node.hypervisor_hostname not in host_loads:
++            host_loads[node.compute_node.hypervisor_hostname] = {}
++            host_loads[node.compute_node.hypervisor_hostname]['mem'] = 0
++            host_loads[node.compute_node.hypervisor_hostname]['cpu'] = 0
++    return host_loads
++
++
++def calculate_host_loads(compute_nodes, compute_stats):
++    host_loads = compute_stats
++    for node in compute_nodes:
++        host_loads[node.compute_node.hypervisor_hostname]['mem'] \
++            /= float(node.compute_node.memory_mb)
++        host_loads[node.compute_node.hypervisor_hostname]['cpu'] \
++            /= 100.00
++    return host_loads
++
++
++def calculate_sd(hosts, param):
++    mean = reduce(lambda res, x: res + hosts[x][param],
++                  hosts, 0) / len(hosts)
++    LOG.debug("Mean %(param)s: %(mean)f", {'mean': mean, 'param': param})
++    variaton = float(reduce(
++        lambda res, x: res + (hosts[x][param] - mean) ** 2,
++        hosts, 0)) / len(hosts)
++    sd = math.sqrt(variaton)
++    LOG.debug("SD %(param)s: %(sd)f", {'sd': sd, 'param': param})
++    return sd
++
++
++def calculate_cpu(instance, compute_nodes=None):
++    instance_host = instance.instance['host']
++    if not instance['prev_cpu_time']:
++        instance['prev_cpu_time'] = 0
++    if instance['prev_cpu_time'] > instance['cpu_time']:
++        instance['prev_cpu_time'] = 0
++    delta_cpu_time = instance['cpu_time'] - instance['prev_cpu_time']
++    delta_time = (instance['updated_at'] - instance['prev_updated_at'])\
++        .seconds
++    if compute_nodes:
++        num_cpu = filter(
++            lambda x: x.compute_node.hypervisor_hostname == instance_host,
++            compute_nodes)[0].compute_node.vcpus
++    else:
++        num_cpu = instance.instance['vcpus']
++    if delta_time:
++        cpu_load = float(delta_cpu_time) / \
++            (float(delta_time) * (10 ** 7) * num_cpu)
++        cpu_load = round(cpu_load, 2)
++        return cpu_load
++    return 0
+diff --git a/nova/scheduler/client/report.py b/nova/scheduler/client/report.py
+index 4261479..b7aea9d 100644
+--- a/nova/scheduler/client/report.py
++++ b/nova/scheduler/client/report.py
+@@ -44,7 +44,6 @@ class SchedulerReportClient(object):
+             del updates['id']
+         else:
+             raise exception.ComputeHostNotCreated(name=str(name))
+-
+         self.conductor_api.compute_node_update(context,
+                                                {'id': compute_node_id},
+                                                updates)
+diff --git a/nova/scheduler/driver.py b/nova/scheduler/driver.py
+index b5d973e..8a05e4b 100644
+--- a/nova/scheduler/driver.py
++++ b/nova/scheduler/driver.py
+@@ -133,3 +133,7 @@ class Scheduler(object):
+         """
+         msg = _("Driver must implement select_destinations")
+         raise NotImplementedError(msg)
++
++    def indicate_drs_threshold(self, context):
++        msg = _("Driver must implement indicate_drs_threshold")
++        raise NotImplementedError(msg)
+diff --git a/nova/scheduler/filters/ram_filter.py b/nova/scheduler/filters/ram_filter.py
+index 4677d2f..82e3b52 100644
+--- a/nova/scheduler/filters/ram_filter.py
++++ b/nova/scheduler/filters/ram_filter.py
+@@ -32,6 +32,20 @@ ram_allocation_ratio_opt = cfg.FloatOpt('ram_allocation_ratio',
+ 
+ CONF = cfg.CONF
+ CONF.register_opt(ram_allocation_ratio_opt)
++CONF.import_opt('reserved_host_memory_mb', 'nova.compute.resource_tracker')
++
++
++class RealRamFilter(filters.BaseHostFilter):
++    def host_passes(self, host_state, filter_properties):
++        requested_ram = filter_properties['instance_resources']['memory']
++        hosts = filter_properties['nodes']
++        host = filter(
++            lambda x: x['host'] == host_state.hypervisor_hostname, hosts)[0]
++        free_ram_mb = host['memory_total'] - host['memory_used'] - \
++            CONF.reserved_host_memory_mb
++        if requested_ram < free_ram_mb:
++            return True
++        return False
+ 
+ 
+ class BaseRamFilter(filters.BaseHostFilter):
+diff --git a/nova/scheduler/host_manager.py b/nova/scheduler/host_manager.py
+index dbf5d39..30ad87b 100644
+--- a/nova/scheduler/host_manager.py
++++ b/nova/scheduler/host_manager.py
+@@ -304,6 +304,9 @@ class HostManager(object):
+             raise exception.SchedulerHostFilterNotFound(filter_name=msg)
+         return good_filters
+ 
++    def choose_host_filters(self, filter_cls_names):
++        return self._choose_host_filters(filter_cls_names)
++
+     def get_filtered_hosts(self, hosts, filter_properties,
+             filter_class_names=None, index=0):
+         """Filter hosts and return only ones passing all filters."""
+@@ -383,14 +386,16 @@ class HostManager(object):
+         return self.weight_handler.get_weighed_objects(self.weight_classes,
+                 hosts, weight_properties)
+ 
+-    def get_all_host_states(self, context):
++    def get_all_host_states(self, context, hypervisor_hostname=None):
+         """Returns a list of HostStates that represents all the hosts
+         the HostManager knows about. Also, each of the consumable resources
+         in HostState are pre-populated and adjusted based on data in the db.
+         """
+ 
+         # Get resource usage across the available compute nodes:
+-        compute_nodes = db.compute_node_get_all(context)
++        compute_nodes = db.compute_node_get_all(
++            context,
++            hypervisor_host=hypervisor_hostname)
+         seen_nodes = set()
+         for compute in compute_nodes:
+             service = compute['service']
+diff --git a/nova/service.py b/nova/service.py
+index 5f851fe..257a049 100644
+--- a/nova/service.py
++++ b/nova/service.py
+@@ -109,6 +109,9 @@ service_opts = [
+     cfg.StrOpt('scheduler_manager',
+                default='nova.scheduler.manager.SchedulerManager',
+                help='Full class name for the Manager for scheduler'),
++    cfg.StrOpt('loadbalancer_manager',
++               default='nova.loadbalancer.load_balancer.LoadBalancer',
++               help='Full class name for the Managet for load balancer'),
+     cfg.IntOpt('service_down_time',
+                default=60,
+                help='Maximum time since last check-in for up service'),
+diff --git a/nova/virt/libvirt/driver.py b/nova/virt/libvirt/driver.py
+index fef2876..3c8541f 100644
+--- a/nova/virt/libvirt/driver.py
++++ b/nova/virt/libvirt/driver.py
+@@ -4295,6 +4295,27 @@ class LibvirtDriver(driver.ComputeDriver):
+                     'ex': ex})
+             raise exception.NovaException(msg)
+ 
++    def _lookup_by_uuid(self, instance_uuid):
++        """Retrieve libvirt domain object given an instance uuid.
++
++        All libvirt error handling should be handled in this method and
++        relevant nova exceptions should be raised in response.
++
++        """
++        try:
++            return self._conn.lookupByUUIDString(instance_uuid)
++        except libvirt.libvirtError as ex:
++            error_code = ex.get_error_code()
++            if error_code == libvirt.VIR_ERR_NO_DOMAIN:
++                raise exception.InstanceNotFound(instance_id=instance_uuid)
++
++            msg = (_("Error from libvirt while looking up %(instance_uuid)s: "
++                     "[Error Code %(error_code)s] %(ex)s")
++                   % {'instance_id': instance_uuid,
++                      'error_code': error_code,
++                      'ex': ex})
++            raise exception.NovaException(msg)
++
+     def get_info(self, instance):
+         """Retrieve information from libvirt for a specific instance name.
+ 
+@@ -4325,6 +4346,44 @@ class LibvirtDriver(driver.ComputeDriver):
+                 'cpu_time': dom_info[4],
+                 'id': virt_dom.ID()}
+ 
++    def get_info_by_uuid(self, instance_uuid):
++        virt_dom = self._lookup_by_uuid(instance_uuid)
++        block_devices = 0
++        try:
++            dom_info = virt_dom.info()
++            # If domain is running then we can collect block device info.
++            if dom_info[0] == 1:
++                xml = virt_dom.XMLDesc(0)
++                tree = etree.fromstring(xml)
++                block_devices_dev = []
++                for target in tree.findall('devices/disk/target'):
++                    dev = target.get('dev')
++                    if dev not in block_devices_dev:
++                        block_devices_dev.append(dev)
++                for dev in block_devices_dev:
++                    stats = virt_dom.blockStats(dev)
++                    if stats:
++                        # Summarize wreq and rreq.
++                        block_devices += stats[0] + stats[2]
++
++        except libvirt.libvirtError as ex:
++            error_code = ex.get_error_code()
++            if error_code == libvirt.VIR_ERR_NO_DOMAIN:
++                raise exception.InstanceNotFound(instance_id=instance_uuid)
++
++            msg = (_('Error from libvirt while getting domain info for '
++                     '%(instance_name)s: [Error Code %(error_code)s] %(ex)s') %
++                   {'instance_name': instance_uuid,
++                    'error_code': error_code,
++                    'ex': ex})
++            raise exception.NovaException(msg)
++
++        return {'mem': dom_info[2]//1024,
++                'cpu_time': dom_info[4],
++                'libvirt_id': virt_dom.ID(),
++                'instance_uuid': instance_uuid,
++                'block_dev_iops': block_devices}
++
+     def _create_domain_setup_lxc(self, instance, block_device_info, disk_info):
+         inst_path = libvirt_utils.get_instance_path(instance)
+         block_device_mapping = driver.block_device_info_get_mapping(
+@@ -6502,6 +6561,7 @@ class HostState(object):
+         data["local_gb"] = disk_info_dict['total']
+         data["vcpus_used"] = self.driver._get_vcpu_used()
+         data["memory_mb_used"] = self.driver._get_memory_mb_used()
++        data["real_memory_mb_used"] = data["memory_mb_used"]
+         data["local_gb_used"] = disk_info_dict['used']
+         data["hypervisor_type"] = self.driver._get_hypervisor_type()
+         data["hypervisor_version"] = self.driver._get_hypervisor_version()

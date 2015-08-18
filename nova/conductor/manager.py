@@ -311,6 +311,10 @@ class ConductorManager(manager.Manager):
         result = self.db.compute_node_update(context, node['id'], values)
         return jsonutils.to_primitive(result)
 
+    def compute_node_stats_upsert(self, context, values):
+        result = self.db.compute_node_stats_upsert(context, values)
+        return jsonutils.to_primitive(result)
+
     def compute_node_delete(self, context, node):
         result = self.db.compute_node_delete(context, node['id'])
         return jsonutils.to_primitive(result)

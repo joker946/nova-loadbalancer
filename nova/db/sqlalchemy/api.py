@@ -558,7 +558,7 @@ def compute_node_get_by_service_id(context, service_id):
 
 
 @require_admin_context
-def compute_node_get_all(context, no_date_fields):
+def compute_node_get_all(context, no_date_fields, hypervisor_host=None):
 
     # NOTE(msdubov): Using lower-level 'select' queries and joining the tables
     #                manually here allows to gain 3x speed-up and to have 5x
@@ -577,9 +577,16 @@ def compute_node_get_all(context, no_date_fields):
         def filter_columns(table):
             return [c for c in table.c if c.name not in redundant_columns]
 
-        compute_node_query = sql.select(filter_columns(compute_node)).\
-                                where(compute_node.c.deleted == 0).\
-                                order_by(compute_node.c.service_id)
+        if hypervisor_host:
+            compute_node_query = sql.select(filter_columns(compute_node)).\
+                where(
+                      (compute_node.c.deleted == 0) &
+                      (compute_node.c.hypervisor_hostname == hypervisor_host)
+                     ).order_by(compute_node.c.service_id)
+        else:
+            compute_node_query = sql.select(filter_columns(compute_node)).\
+                where(compute_node.c.deleted == 0)\
+                .order_by(compute_node.c.service_id)
         compute_node_rows = conn.execute(compute_node_query).fetchall()
 
         service_query = sql.select(filter_columns(service)).\
@@ -644,6 +651,56 @@ def compute_node_update(context, compute_id, values):
         compute_ref.update(values)
 
     return compute_ref
+
+
+@require_admin_context
+@_retry_on_deadlock
+def compute_node_stats_upsert(context, values):
+    session = get_session()
+    compute_node = values['node']
+    instances = values['instances']
+    with session.begin():
+        compute_stats = model_query(context, models.ComputeNodeStats,
+                                    session=session).filter_by(
+            compute_id=compute_node['compute_id']).first()
+        if compute_stats:
+            compute_stats.update(compute_node)
+        else:
+            compute_stats = models.ComputeNodeStats()
+            compute_stats.update(compute_node)
+            compute_stats.save(session=session)
+        for x in instances:
+            instance = model_query(context, models.InstanceStats,
+                                   session=session)\
+                .filter(
+                    models.InstanceStats.instance_uuid == x['instance_uuid'])\
+                .first()
+            if instance:
+                instance['prev_cpu_time'] = instance['cpu_time']
+                instance['prev_updated_at'] = instance['updated_at']
+                instance['prev_block_dev_iops'] = instance['block_dev_iops']
+                instance.update(x)
+            else:
+                instance_stats = models.InstanceStats()
+                instance_stats.update(x)
+                instance_stats.save(session=session)
+    return compute_stats
+
+
+@require_admin_context
+def get_compute_node_stats(context):
+    return model_query(context, models.ComputeNodeStats).\
+        join(models.ComputeNode).filter(models.ComputeNode.deleted == 0)\
+        .options(joinedload('compute_node')).all()
+
+
+@require_admin_context
+def get_instances_stat(context, host):
+    return model_query(context, models.InstanceStats).\
+        join(models.Instance,
+             models.InstanceStats.instance_uuid == models.Instance.uuid)\
+        .filter(models.Instance.host == host).options(joinedload('instance'))\
+        .all()
 
 
 @require_admin_context

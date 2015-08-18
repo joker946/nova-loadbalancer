@@ -1,0 +1,145 @@
+[
+    {
+        "instances": [
+            {
+                "instance_uuid": "5f7f5b00-1d38-44fa-bdf2-78daeab15414",
+                "cpu_time": 3372130000000,
+                "task_state": null,
+                "mem": 1024,
+                "prev_updated_at": "2015-08-18T11:17:30.558403",
+                "updated_at": "2015-08-18T11:18:32.598787",
+                "prev_block_dev_iops": 10,
+                "prev_cpu_time": 3369500000000,
+                "vcpus": 1,
+                "host": "compute2.students.dev",
+                "block_dev_iops": 10
+            },
+            {
+                "instance_uuid": "ccdb0aef-bcaa-4ab2-9714-709adfd2d147",
+                "cpu_time": 3320870000000,
+                "task_state": null,
+                "mem": 768,
+                "prev_updated_at": "2015-08-18T11:17:30.561783",
+                "updated_at": "2015-08-18T11:18:32.603841",
+                "prev_block_dev_iops": 0,
+                "prev_cpu_time": 3318280000000,
+                "vcpus": 1,
+                "host": "compute2.students.dev",
+                "block_dev_iops": 0
+            },
+            {
+                "instance_uuid": "4ae39375-803b-4f3b-92a9-4a3efc0551e6",
+                "cpu_time": 14860260000000,
+                "task_state": null,
+                "mem": 512,
+                "prev_updated_at": "2015-08-18T11:17:30.568862",
+                "updated_at": "2015-08-18T11:18:32.614533",
+                "prev_block_dev_iops": 29,
+                "prev_cpu_time": 14857540000000,
+                "vcpus": 1,
+                "host": "compute2.students.dev",
+                "block_dev_iops": 29
+            },
+            {
+                "instance_uuid": "5cd5b043-d6d3-4384-aece-9e740bdc1110",
+                "cpu_time": 78906530000000,
+                "task_state": null,
+                "mem": 768,
+                "prev_updated_at": "2015-08-18T11:18:00.249673",
+                "updated_at": "2015-08-18T11:19:01.264069",
+                "prev_block_dev_iops": 0,
+                "prev_cpu_time": 78844620000000,
+                "vcpus": 1,
+                "host": "compute1.students.dev",
+                "block_dev_iops": 0
+            },
+            {
+                "instance_uuid": "2ef69464-0bca-4fc2-95dd-45704ba80c66",
+                "cpu_time": 78929080000000,
+                "task_state": null,
+                "mem": 256,
+                "prev_updated_at": "2015-08-18T11:17:30.565537",
+                "updated_at": "2015-08-18T11:18:32.609483",
+                "prev_block_dev_iops": 0,
+                "prev_cpu_time": 78866220000000,
+                "vcpus": 1,
+                "host": "compute2.students.dev",
+                "block_dev_iops": 0
+            },
+            {
+                "instance_uuid": "c5bae148-47b8-4836-ab3a-6ca06794b6d7",
+                "cpu_time": 14567370000000,
+                "task_state": null,
+                "mem": 768,
+                "prev_updated_at": "2015-08-18T11:17:30.572237",
+                "updated_at": "2015-08-18T11:18:32.618793",
+                "prev_block_dev_iops": 0,
+                "prev_cpu_time": 14564770000000,
+                "vcpus": 1,
+                "host": "compute2.students.dev",
+                "block_dev_iops": 0
+            },
+            {
+                "instance_uuid": "a89dd083-b1fd-4d3d-9a2b-f18cfcfb1ea3",
+                "cpu_time": 80412070000000,
+                "task_state": null,
+                "mem": 256,
+                "prev_updated_at": "2015-08-18T11:17:30.575050",
+                "updated_at": "2015-08-18T11:18:32.621942",
+                "prev_block_dev_iops": 0,
+                "prev_cpu_time": 80349200000000,
+                "vcpus": 1,
+                "host": "compute2.students.dev",
+                "block_dev_iops": 0
+            },
+            {
+                "instance_uuid": "7128fae6-b052-4bac-864a-26afd4f21ea5",
+                "cpu_time": 79067470000000,
+                "task_state": null,
+                "mem": 4096,
+                "prev_updated_at": "2015-08-18T11:17:48.631772",
+                "updated_at": "2015-08-18T11:18:49.655599",
+                "prev_block_dev_iops": 0,
+                "prev_cpu_time": 79005440000000,
+                "vcpus": 2,
+                "host": "compute3.students.dev",
+                "block_dev_iops": 0
+            },
+            {
+                "instance_uuid": "ea2ad1ef-8a6b-4458-9cb1-942b855642df",
+                "cpu_time": 78838600000000,
+                "task_state": null,
+                "mem": 256,
+                "prev_updated_at": "2015-08-18T11:18:00.252690",
+                "updated_at": "2015-08-18T11:19:01.268693",
+                "prev_block_dev_iops": 0,
+                "prev_cpu_time": 78776680000000,
+                "vcpus": 1,
+                "host": "compute1.students.dev",
+                "block_dev_iops": 0
+            }
+        ]
+    },
+    {
+        "compute_nodes": [
+            {
+                "cpu_used_percent": 29,
+                "memory_used": 1572,
+                "hypervisor_hostname": "compute2.students.dev",
+                "memory_total": 15888
+            },
+            {
+                "cpu_used_percent": 14,
+                "memory_used": 886,
+                "hypervisor_hostname": "compute3.students.dev",
+                "memory_total": 15888
+            },
+            {
+                "cpu_used_percent": 27,
+                "memory_used": 3202,
+                "hypervisor_hostname": "compute1.students.dev",
+                "memory_total": 15888
+            }
+        ]
+    }
+]

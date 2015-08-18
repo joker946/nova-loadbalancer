@@ -1,0 +1,24 @@
+ nova/cmd/loadbalancer.py                          |  41 ++++
+ nova/compute/resource_tracker.py                  |  26 ++-
+ nova/conductor/api.py                             |   3 +
+ nova/conductor/manager.py                         |   4 +
+ nova/conductor/rpcapi.py                          |   4 +
+ nova/db/api.py                                    |  18 +-
+ nova/db/sqlalchemy/api.py                         |  65 ++++++-
+ nova/db/sqlalchemy/models.py                      |  34 ++++
+ nova/loadbalancer/__init__.py                     |  19 ++
+ nova/loadbalancer/balancer/__init__.py            |   0
+ nova/loadbalancer/balancer/base.py                |  74 ++++++++
+ nova/loadbalancer/balancer/classic.py             | 146 +++++++++++++++
+ nova/loadbalancer/balancer/minimizeSD.py          | 106 +++++++++++
+ nova/loadbalancer/load_balancer.py                |  85 +++++++++
+ nova/loadbalancer/threshold/__init__.py           |   0
+ nova/loadbalancer/threshold/base.py               |  22 +++
+ nova/loadbalancer/threshold/standart_deviation.py |  80 ++++++++
+ nova/loadbalancer/threshold/step_threshold.py     |  60 ++++++
+ nova/loadbalancer/utils.py                        | 217 ++++++++++++++++++++++
+ nova/scheduler/filters/ram_filter.py              |  14 ++
+ nova/scheduler/host_manager.py                    |   9 +-
+ nova/service.py                                   |   3 +
+ nova/virt/libvirt/driver.py                       |  60 ++++++
+ 23 files changed, 1081 insertions(+), 9 deletions(-)
