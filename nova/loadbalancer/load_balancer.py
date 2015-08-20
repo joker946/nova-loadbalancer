@@ -18,6 +18,7 @@ from nova import manager
 from nova.openstack.common import log as logging
 from nova.openstack.common import periodic_task
 from stevedore import driver
+from statistics import make_stats
 
 
 lb_opts = [
@@ -73,6 +74,7 @@ class LoadBalancer(manager.Manager):
             CONF.loadbalancer.balancer_class)
 
     def _balancer(self, context):
+        make_stats()
         node, nodes, extra_info = self.threshold_class.indicate(context)
         if node:
             return self.balancer_class.balance(context,

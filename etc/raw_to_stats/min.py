@@ -119,7 +119,7 @@ def min_sd(**kwargs):
 def get_instance_resources(i):
     instance_resources = {'uuid': i['instance_uuid']}
     instance_resources['cpu'] = calculate_cpu(i)
-    instance_resources['memory'] = i['mem']
+    instance_resources['memory'] = float(i['mem']) / 16384
     instance_resources['io'] = i[
         'block_dev_iops'] - i['prev_block_dev_iops']
     return instance_resources
@@ -127,6 +127,11 @@ def get_instance_resources(i):
 
 min_sd(nodes=compute_nodes)
 
+total_memory = 8192
+instance_json = []
 for i in instances:
-    instance_resources = get_instance_resources(i)
-    print instance_resources
+    print get_instance_resources(i)
+    instance_json.append(get_instance_resources(i))
+
+with open('instance_out.json', 'w') as output_instance:
+    json.dump(instance_json, output_instance)
