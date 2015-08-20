@@ -1,9 +1,22 @@
 import json
 import dateutil.parser
+import math
+
+from copy import deepcopy
+
+def calculate_sd(hosts, param):
+    mean = reduce(lambda res, x: res + hosts[x][param],
+                  hosts, 0) / len(hosts)
+    #LOG.debug("Mean %(param)s: %(mean)f", {'mean': mean, 'param': param})
+    variaton = float(reduce(
+        lambda res, x: res + (hosts[x][param] - mean) ** 2,
+        hosts, 0)) / len(hosts)
+    sd = math.sqrt(variaton)
+    #LOG.debug("SD %(param)s: %(sd)f", {'sd': sd, 'param': param})
+    return sd
 
 
 def calculate_cpu(instance, compute_nodes=None):
-    instance_host = instance['host']
     if not instance['prev_cpu_time']:
         instance['prev_cpu_time'] = 0
     if instance['prev_cpu_time'] > instance['cpu_time']:
@@ -55,7 +68,47 @@ data = json.load(open('input_data.json'))
 instances = data[0]['instances']
 compute_nodes = data[1]['compute_nodes']
 a = fill_compute_stats(instances, compute_nodes)
-a = calculate_host_loads(compute_nodes, a)
+a = [calculate_host_loads(compute_nodes, a)]
 print a
 with open('data.json', 'w') as output:
     json.dump(a, output)
+
+
+def _simulate_migration(instance, node, host_loads, compute_nodes):
+    source_host = instance['host']
+    target_host = node['hypervisor_hostname']
+    vm_ram = instance['mem']
+    vm_cpu = calculate_cpu(instance, compute_nodes)
+    _host_loads = deepcopy(host_loads)
+    #print _host_loads
+    _host_loads[source_host]['mem'] -= vm_ram
+    _host_loads[source_host]['cpu'] -= vm_cpu
+    _host_loads[target_host]['mem'] += vm_ram
+    _host_loads[target_host]['cpu'] += vm_cpu
+    _host_loads = calculate_host_loads(compute_nodes, _host_loads)
+    ram_sd = calculate_sd(_host_loads, 'mem')
+    cpu_sd = calculate_sd(_host_loads, 'cpu')
+    return {'cpu_sd': cpu_sd,
+            'ram_sd': ram_sd,
+            'total_sd': cpu_sd + ram_sd}
+
+
+def min_sd(**kwargs):
+    compute_nodes = kwargs.get('nodes')
+    host_loads = fill_compute_stats(instances, compute_nodes)
+    print host_loads
+    vm_host_map = []
+    for instance in instances:
+        for node in compute_nodes:
+            h_hostname = node['hypervisor_hostname']
+            # Source host shouldn't be use.
+            if instance['host'] != h_hostname:
+                sd = _simulate_migration(instance, node, host_loads,
+                                         compute_nodes)
+                vm_host_map.append({'host': h_hostname,
+                                    'vm': instance['instance_uuid'],
+                                    'sd': sd})
+    vm_host_map = sorted(vm_host_map, key=lambda x: x['sd']['total_sd'])
+    print vm_host_map
+
+min_sd(nodes=compute_nodes)

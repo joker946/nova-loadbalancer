@@ -125,12 +125,12 @@ def normalize_params(params, k='uuid'):
     for param in params:
         for key in param:
             if key != k:
-                if max_values.get(key):
+                if key in max_values:
                     if max_values[key] < param[key]:
                         max_values[key] = param[key]
                 else:
                     max_values[key] = param[key]
-                if min_values.get(key):
+                if key in min_values:
                     if min_values[key] > param[key]:
                         min_values[key] = param[key]
                 else:
@@ -142,7 +142,7 @@ def normalize_params(params, k='uuid'):
         norm_ins = {}
         for key in param:
             if key != k:
-                if len(params) == 1 or max_values[key] == min_values[key]:
+                if len(params) == 1 or (max_values[key] == min_values[key]):
                     delta_key = 1
                 else:
                     delta_key = max_values[key] - min_values[key]

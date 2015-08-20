@@ -4,7 +4,11 @@ import numpy as np
 import pylab
 import matplotlib.pyplot as plt
 import json
+import subprocess
 
+subprocess.call(["scp",
+                 "root@10.5.2.103:/root/loadbalancer_data/input.json",
+                 "input_data.json"])
 
 json_data = open("data.json").read()
 parsed_json = json.loads(json_data)
@@ -29,6 +33,6 @@ for x in parsed_json:
     plt.ylim(0, 1)
     plt.legend((p1[0], p2[0]), ('RAM', 'CPU'), loc=9)
     i += 1
-mng = plt.get_current_fig_manager()
-mng.resize(*mng.window.maxsize())
+#mng = plt.get_current_fig_manager()
+#mng.resize(*mng.window.maxsize())
 plt.show()

@@ -99,17 +99,20 @@ class Classic(BaseBalancer):
         weighted_instances = self._weight_instances(normalized_instances,
                                                     extra_info)
         LOG.info(_(weighted_instances))
-        chosen_instance = weighted_instances[0]
-        chosen_instance['resources'] = filter(
-            lambda x: x['uuid'] == chosen_instance['uuid'],
-            instances_params)[0]
-        return chosen_instance
+        for chosen_instance in weighted_instances:
+            chosen_instance['resources'] = filter(
+                lambda x: x['uuid'] == chosen_instance['uuid'],
+                instances_params)[0]
+            yield chosen_instance
 
-    def _choose_host_to_migrate(self, context, chosen_instance, nodes):
-        filtered, filter_properties = self.filter_hosts(context,
-                                                        chosen_instance, nodes)
+    def _choose_host_to_migrate(self, context, weighted_instances, nodes):
+        for c in weighted_instances:
+            filtered, filter_properties = self.filter_hosts(context, c, nodes)
+            if filtered:
+                chosen_instance = c
+                break
         if not filtered:
-            return
+            return None, None
         nodes = filter_properties['nodes']
         # 'memory_total' field shouldn't be normalized.
         for n in nodes:
@@ -119,7 +122,7 @@ class Classic(BaseBalancer):
             for host in filtered if n['host'] == host.hypervisor_hostname]
         normalized_hosts = lb_utils.normalize_params(filtered_nodes, 'host')
         weighted_hosts = self._weight_hosts(normalized_hosts)
-        return weighted_hosts[0]
+        return weighted_hosts[0], chosen_instance
 
     def _classic(self, context, **kwargs):
         node = kwargs.get('node')
@@ -128,19 +131,20 @@ class Classic(BaseBalancer):
         instances = db.get_instances_stat(
             context,
             node.compute_node.hypervisor_hostname)
-        chosen_instance = self._choose_instance_to_migrate(instances,
-                                                           extra_info)
-        LOG.debug(_(chosen_instance))
-        chosen_host = self._choose_host_to_migrate(context,
-                                                   chosen_instance,
-                                                   nodes)
-        selected_pair = {chosen_host['host']: chosen_instance['uuid']}
+        weighted_instances = self._choose_instance_to_migrate(instances,
+                                                              extra_info)
+        c_host, c_instance = self._choose_host_to_migrate(context,
+                                                          weighted_instances,
+                                                          nodes)
+        if not c_instance:
+            return
+        selected_pair = {c_host['host']: c_instance['uuid']}
         LOG.debug(_(selected_pair))
-        if node.compute_node.hypervisor_hostname == chosen_host['host']:
+        if node.compute_node.hypervisor_hostname == c_host['host']:
             LOG.debug("Source host is optimal."
                       " Live Migration will not be perfomed.")
             return
-        self.migrate(context, chosen_instance['uuid'], chosen_host['host'])
+        self.migrate(context, c_instance['uuid'], c_host['host'])
 
     def balance(self, context, **kwargs):
         return self._classic(context, **kwargs)
