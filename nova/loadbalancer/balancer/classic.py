@@ -130,7 +130,7 @@ class Classic(BaseBalancer):
         extra_info = kwargs.get('extra_info')
         instances = db.get_instances_stat(
             context,
-            node.compute_node.hypervisor_hostname)
+            node['hypervisor_hostname'])
         weighted_instances = self._choose_instance_to_migrate(instances,
                                                               extra_info)
         c_host, c_instance = self._choose_host_to_migrate(context,
@@ -140,7 +140,7 @@ class Classic(BaseBalancer):
             return
         selected_pair = {c_host['host']: c_instance['uuid']}
         LOG.debug(_(selected_pair))
-        if node.compute_node.hypervisor_hostname == c_host['host']:
+        if node['hypervisor_hostname'] == c_host['host']:
             LOG.debug("Source host is optimal."
                       " Live Migration will not be perfomed.")
             return

@@ -47,7 +47,7 @@ class MinimizeSD(BaseBalancer):
 
     def _simulate_migration(self, instance, node, host_loads, compute_nodes):
         source_host = instance.instance['host']
-        target_host = node.compute_node.hypervisor_hostname
+        target_host = node['hypervisor_hostname']
         vm_ram = instance['mem']
         vm_cpu = lb_utils.calculate_cpu(instance, compute_nodes)
         _host_loads = deepcopy(host_loads)
@@ -69,14 +69,14 @@ class MinimizeSD(BaseBalancer):
         for node in compute_nodes:
             node_instances = db.get_instances_stat(
                 context,
-                node.compute_node.hypervisor_hostname)
+                node['hypervisor_hostname'])
             instances.extend(node_instances)
         host_loads = lb_utils.fill_compute_stats(instances, compute_nodes)
         LOG.debug(_(host_loads))
         vm_host_map = []
         for instance in instances:
             for node in compute_nodes:
-                h_hostname = node.compute_node.hypervisor_hostname
+                h_hostname = node['hypervisor_hostname']
                 # Source host shouldn't be use.
                 if instance.instance['host'] != h_hostname:
                     sd = self._simulate_migration(instance, node, host_loads,

@@ -10,12 +10,10 @@ from datetime import datetime
 def calculate_sd(hosts, param):
     mean = reduce(lambda res, x: res + hosts[x][param],
                   hosts, 0) / len(hosts)
-    #LOG.debug("Mean %(param)s: %(mean)f", {'mean': mean, 'param': param})
     variaton = float(reduce(
         lambda res, x: res + (hosts[x][param] - mean) ** 2,
         hosts, 0)) / len(hosts)
     sd = math.sqrt(variaton)
-    #LOG.debug("SD %(param)s: %(sd)f", {'sd': sd, 'param': param})
     return sd
 
 
@@ -100,12 +98,14 @@ def fetch_info():
 
     res_json.append({'instances': instance_stats})
 
-    cur.execute('SELECT compute_node_stats.memory_total, '
-                'compute_node_stats.cpu_used_percent, '
-                'compute_node_stats.memory_used, '
-                'compute_nodes.hypervisor_hostname '
-                'FROM compute_node_stats JOIN compute_nodes '
-                'ON compute_node_stats.compute_id = compute_nodes.id')
+    cur.execute('SELECT cs.memory_total, cs.cpu_used_percent, '
+                'cs.memory_used, compute_nodes.hypervisor_hostname FROM '
+                '(SELECT compute_id, max(created_at) as maxup '
+                'from compute_node_stats group by compute_id) as x '
+                'inner join compute_node_stats as cs '
+                'on cs.compute_id = x.compute_id and cs.created_at = x.maxup '
+                'inner join compute_nodes on '
+                'cs.compute_id = compute_nodes.id;')
     res = cur.fetchall()
     for r in res:
         compute_stats.append(r)

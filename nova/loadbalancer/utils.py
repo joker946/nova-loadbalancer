@@ -108,7 +108,7 @@ def build_filter_properties(context, chosen_instance, nodes):
         dict_node = {'memory_total': n['memory_total'],
                      'memory_used': n['memory_used'],
                      'cpu_used_percent': n['cpu_used_percent'],
-                     'host': n.compute_node.hypervisor_hostname}
+                     'host': n['hypervisor_hostname']}
         dict_nodes.append(dict_node)
     filter_properties.update({'instance_type': instance_type,
                               'request_spec': req_spec,
@@ -165,19 +165,19 @@ def fill_compute_stats(instances, compute_nodes):
                 host_loads[instance.instance['host']]['mem'] = instance['mem']
                 host_loads[instance.instance['host']]['cpu'] = cpu_util
     for node in compute_nodes:
-        if node.compute_node.hypervisor_hostname not in host_loads:
-            host_loads[node.compute_node.hypervisor_hostname] = {}
-            host_loads[node.compute_node.hypervisor_hostname]['mem'] = 0
-            host_loads[node.compute_node.hypervisor_hostname]['cpu'] = 0
+        if node['hypervisor_hostname'] not in host_loads:
+            host_loads[node['hypervisor_hostname']] = {}
+            host_loads[node['hypervisor_hostname']]['mem'] = 0
+            host_loads[node['hypervisor_hostname']]['cpu'] = 0
     return host_loads
 
 
 def calculate_host_loads(compute_nodes, compute_stats):
     host_loads = compute_stats
     for node in compute_nodes:
-        host_loads[node.compute_node.hypervisor_hostname]['mem'] \
-            /= float(node.compute_node.memory_mb)
-        host_loads[node.compute_node.hypervisor_hostname]['cpu'] \
+        host_loads[node['hypervisor_hostname']]['mem'] \
+            /= float(node['memory_total'])
+        host_loads[node['hypervisor_hostname']]['cpu'] \
             /= 100.00
     return host_loads
 
@@ -205,8 +205,8 @@ def calculate_cpu(instance, compute_nodes=None):
         .seconds
     if compute_nodes:
         num_cpu = filter(
-            lambda x: x.compute_node.hypervisor_hostname == instance_host,
-            compute_nodes)[0].compute_node.vcpus
+            lambda x: x['hypervisor_hostname'] == instance_host,
+            compute_nodes)[0]['vcpus']
     else:
         num_cpu = instance.instance['vcpus']
     if delta_time:

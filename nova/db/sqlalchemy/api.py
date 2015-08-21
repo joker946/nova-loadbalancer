@@ -660,15 +660,9 @@ def compute_node_stats_upsert(context, values):
     compute_node = values['node']
     instances = values['instances']
     with session.begin():
-        compute_stats = model_query(context, models.ComputeNodeStats,
-                                    session=session).filter_by(
-            compute_id=compute_node['compute_id']).first()
-        if compute_stats:
-            compute_stats.update(compute_node)
-        else:
-            compute_stats = models.ComputeNodeStats()
-            compute_stats.update(compute_node)
-            compute_stats.save(session=session)
+        compute_stats = models.ComputeNodeStats()
+        compute_stats.update(compute_node)
+        compute_stats.save(session=session)
         for x in instances:
             instance = model_query(context, models.InstanceStats,
                                    session=session)\
@@ -688,10 +682,48 @@ def compute_node_stats_upsert(context, values):
 
 
 @require_admin_context
-def get_compute_node_stats(context):
-    return model_query(context, models.ComputeNodeStats).\
-        join(models.ComputeNode).filter(models.ComputeNode.deleted == 0)\
-        .options(joinedload('compute_node')).all()
+def get_compute_node_stats(context, use_mean=False):
+    session = get_session()
+    if use_mean:
+        res = session.query(
+            models.ComputeNodeStats.compute_id,
+            func.avg(models.ComputeNodeStats.memory_used),
+            models.ComputeNodeStats.memory_total,
+            func.avg(models.ComputeNodeStats.cpu_used_percent),
+            models.ComputeNode.hypervisor_hostname,
+            models.ComputeNode.vcpus,
+            )\
+            .join(models.ComputeNode,
+                  models.ComputeNodeStats.compute_id == models.ComputeNode.id)\
+            .filter(models.ComputeNode.deleted == 0)\
+            .group_by(models.ComputeNodeStats.compute_id,
+                      models.ComputeNodeStats.memory_total,
+                      models.ComputeNode.hypervisor_hostname,
+                      models.ComputeNode.vcpus).all()
+    else:
+        sub = session.query(func.max(models.ComputeNodeStats.created_at).label(
+            "cat"), models.ComputeNodeStats.compute_id)\
+            .group_by(models.ComputeNodeStats.compute_id).subquery()
+        _and = and_(sub.c.cat == models.ComputeNodeStats.created_at,
+                    sub.c.compute_id == models.ComputeNodeStats.compute_id)
+        res = session.query(
+                models.ComputeNodeStats.compute_id,
+                models.ComputeNodeStats.memory_used,
+                models.ComputeNodeStats.memory_total,
+                models.ComputeNodeStats.cpu_used_percent,
+                models.ComputeNode.hypervisor_hostname,
+                models.ComputeNode.vcpus)\
+            .join((sub, _and))\
+            .join(models.ComputeNode,
+                  models.ComputeNodeStats.compute_id == models.ComputeNode.id)\
+            .filter(models.ComputeNode.deleted == 0).all()
+    fields = ('compute_id', 'memory_used', 'memory_total',
+              'cpu_used_percent', 'hypervisor_hostname', 'vcpus')
+    response = []
+    for x in res:
+        response.append(dict((field, x[idx])
+                        for idx, field in enumerate(fields)))
+    return response
 
 
 @require_admin_context

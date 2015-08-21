@@ -53,7 +53,7 @@ class Standart_Deviation(base.Base):
         for node in compute_nodes:
             node_instances = db.get_instances_stat(
                 context,
-                node.compute_node.hypervisor_hostname)
+                node['hypervisor_hostname'])
             instances.extend(node_instances)
         compute_stats = utils.fill_compute_stats(instances, compute_nodes)
         host_loads = utils.calculate_host_loads(compute_nodes, compute_stats)
@@ -73,8 +73,7 @@ class Standart_Deviation(base.Base):
                                          reverse=True)[0]
             host = filter(
                 lambda x:
-                x.compute_node.hypervisor_hostname == overloaded_host,
-                compute_nodes)[0]
+                x['hypervisor_hostname'] == overloaded_host, compute_nodes)[0]
             LOG.debug(_(host))
             return host, compute_nodes, extra_info
         return [], [], {}
