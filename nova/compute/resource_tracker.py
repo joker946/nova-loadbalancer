@@ -19,6 +19,7 @@ scheduler with useful information about availability through the ComputeNode
 model.
 """
 import copy
+import psutil
 
 from oslo.config import cfg
 
@@ -41,6 +42,7 @@ from nova import rpc
 from nova.scheduler import client as scheduler_client
 from nova import utils
 from nova.virt import hardware
+
 
 resource_tracker_opts = [
     cfg.IntOpt('reserved_host_disk_mb', default=0,
@@ -389,6 +391,16 @@ class ResourceTracker(object):
 
         self._update_available_resource(context, resources)
 
+    def _make_compute_stats(self, resources):
+        if self.compute_node:
+            stat = {}
+            stat['memory_used'] = resources['real_memory_mb_used']
+            stat['memory_total'] = resources['memory_mb']
+            stat['cpu_used_percent'] = psutil.cpu_percent()
+            stat['compute_id'] = self.compute_node['id']
+            return stat
+        return None
+
     @utils.synchronized(COMPUTE_RESOURCE_SEMAPHORE)
     def _update_available_resource(self, context, resources):
 
@@ -416,8 +428,20 @@ class ResourceTracker(object):
                             'numa_topology'])
 
         # Now calculate usage based on instance utilization:
-        self._update_usage_from_instances(context, resources, instances)
 
+        self._update_usage_from_instances(context, resources, instances)
+        compute_stats = self._make_compute_stats(resources)
+        LOG.info(_(compute_stats))
+        ins_stats = []
+        for x in instances:
+            ins_stats.append(self.driver.get_info_by_uuid(x['uuid']))
+        drs_stats = {}
+        drs_stats['node'] = compute_stats
+        drs_stats['instances'] = ins_stats
+        if compute_stats:
+            self.conductor_api.compute_node_stats_upsert(context,
+                                                         drs_stats)
+        LOG.info(_(ins_stats))
         # Grab all in-progress migrations:
         capi = self.conductor_api
         migrations = capi.migration_get_in_progress_by_host_and_node(context,

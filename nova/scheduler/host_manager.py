@@ -304,6 +304,9 @@ class HostManager(object):
             raise exception.SchedulerHostFilterNotFound(filter_name=msg)
         return good_filters
 
+    def choose_host_filters(self, filter_cls_names):
+        return self._choose_host_filters(filter_cls_names)
+
     def get_filtered_hosts(self, hosts, filter_properties,
             filter_class_names=None, index=0):
         """Filter hosts and return only ones passing all filters."""
@@ -383,14 +386,16 @@ class HostManager(object):
         return self.weight_handler.get_weighed_objects(self.weight_classes,
                 hosts, weight_properties)
 
-    def get_all_host_states(self, context):
+    def get_all_host_states(self, context, hypervisor_hostname=None):
         """Returns a list of HostStates that represents all the hosts
         the HostManager knows about. Also, each of the consumable resources
         in HostState are pre-populated and adjusted based on data in the db.
         """
 
         # Get resource usage across the available compute nodes:
-        compute_nodes = db.compute_node_get_all(context)
+        compute_nodes = db.compute_node_get_all(
+            context,
+            hypervisor_host=hypervisor_hostname)
         seen_nodes = set()
         for compute in compute_nodes:
             service = compute['service']
