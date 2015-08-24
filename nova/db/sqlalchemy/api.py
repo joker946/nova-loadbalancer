@@ -727,7 +727,7 @@ def get_compute_node_stats(context, use_mean=False):
 
 @require_admin_context
 def get_instances_stat(context, host):
-    return model_query(context, models.InstanceStats).\
+    return model_query(context, models.InstanceStats, read_deleted="no").\
         join(models.Instance,
              models.InstanceStats.instance_uuid == models.Instance.uuid)\
         .filter(models.Instance.host == host).options(joinedload('instance'))\
@@ -1785,6 +1785,9 @@ def instance_destroy(context, instance_uuid, constraint=None):
                 filter_by(instance_uuid=instance_uuid).\
                 soft_delete()
         model_query(context, models.InstanceExtra, session=session).\
+                filter_by(instance_uuid=instance_uuid).\
+                soft_delete()
+        model_query(context, models.InstanceStats, session=session).\
                 filter_by(instance_uuid=instance_uuid).\
                 soft_delete()
     return instance_ref

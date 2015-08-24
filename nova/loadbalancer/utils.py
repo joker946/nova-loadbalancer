@@ -200,6 +200,10 @@ def calculate_cpu(instance, compute_nodes=None):
         instance['prev_cpu_time'] = 0
     if instance['prev_cpu_time'] > instance['cpu_time']:
         instance['prev_cpu_time'] = 0
+    if not instance['updated_at']:
+        return 0
+    if not instance['prev_updated_at']:
+        instance['prev_updated_at'] = instance['created_at']
     delta_cpu_time = instance['cpu_time'] - instance['prev_cpu_time']
     delta_time = (instance['updated_at'] - instance['prev_updated_at'])\
         .seconds

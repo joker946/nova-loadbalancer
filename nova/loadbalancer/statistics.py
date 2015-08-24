@@ -23,6 +23,10 @@ def calculate_cpu(instance, compute_nodes=None):
     if instance['prev_cpu_time'] > instance['cpu_time']:
         instance['prev_cpu_time'] = 0
     delta_cpu_time = instance['cpu_time'] - instance['prev_cpu_time']
+    if not instance['updated_at']:
+        return 0
+    if not instance['prev_updated_at']:
+        instance['prev_updated_at'] = instance['created_at']
     delta_time = (
         dateutil.parser.parse(instance['updated_at']) - dateutil.parser.parse(
             instance['prev_updated_at']))\
