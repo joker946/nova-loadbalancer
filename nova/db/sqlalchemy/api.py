@@ -706,13 +706,12 @@ def get_compute_node_stats(context, use_mean=False):
             .group_by(models.ComputeNodeStats.compute_id).subquery()
         _and = and_(sub.c.cat == models.ComputeNodeStats.created_at,
                     sub.c.compute_id == models.ComputeNodeStats.compute_id)
-        res = session.query(
-                models.ComputeNodeStats.compute_id,
-                models.ComputeNodeStats.memory_used,
-                models.ComputeNodeStats.memory_total,
-                models.ComputeNodeStats.cpu_used_percent,
-                models.ComputeNode.hypervisor_hostname,
-                models.ComputeNode.vcpus)\
+        res = session.query(models.ComputeNodeStats.compute_id,
+                            models.ComputeNodeStats.memory_used,
+                            models.ComputeNodeStats.memory_total,
+                            models.ComputeNodeStats.cpu_used_percent,
+                            models.ComputeNode.hypervisor_hostname,
+                            models.ComputeNode.vcpus)\
             .join((sub, _and))\
             .join(models.ComputeNode,
                   models.ComputeNodeStats.compute_id == models.ComputeNode.id)\

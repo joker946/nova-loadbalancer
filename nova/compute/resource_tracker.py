@@ -43,7 +43,6 @@ from nova.scheduler import client as scheduler_client
 from nova import utils
 from nova.virt import hardware
 
-
 resource_tracker_opts = [
     cfg.IntOpt('reserved_host_disk_mb', default=0,
                help='Amount of disk in MB to reserve for the host'),
@@ -431,17 +430,19 @@ class ResourceTracker(object):
 
         self._update_usage_from_instances(context, resources, instances)
         compute_stats = self._make_compute_stats(resources)
-        LOG.info(_(compute_stats))
         ins_stats = []
-        for x in instances:
-            ins_stats.append(self.driver.get_info_by_uuid(x['uuid']))
-        drs_stats = {}
-        drs_stats['node'] = compute_stats
-        drs_stats['instances'] = ins_stats
+        try:
+            for x in instances:
+                ins_stats.append(self.driver.get_info_by_uuid(x['uuid']))
+        except Exception:
+            LOG.warn("Some instance could not be found.")
+        lb_stats = {}
+        lb_stats['node'] = compute_stats
+        lb_stats['instances'] = ins_stats
         if compute_stats:
             self.conductor_api.compute_node_stats_upsert(context,
-                                                         drs_stats)
-        LOG.info(_(ins_stats))
+                                                         lb_stats)
+        LOG.info(_(lb_stats))
         # Grab all in-progress migrations:
         capi = self.conductor_api
         migrations = capi.migration_get_in_progress_by_host_and_node(context,
