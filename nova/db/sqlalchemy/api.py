@@ -682,8 +682,9 @@ def compute_node_stats_upsert(context, values):
 
 
 @require_admin_context
-def get_compute_node_stats(context, use_mean=False):
+def get_compute_node_stats(context, use_mean=False, read_suspended=False):
     session = get_session()
+    res = None
     if use_mean:
         res = session.query(
             models.ComputeNodeStats.compute_id,
@@ -695,11 +696,7 @@ def get_compute_node_stats(context, use_mean=False):
             )\
             .join(models.ComputeNode,
                   models.ComputeNodeStats.compute_id == models.ComputeNode.id)\
-            .filter(models.ComputeNode.deleted == 0)\
-            .group_by(models.ComputeNodeStats.compute_id,
-                      models.ComputeNodeStats.memory_total,
-                      models.ComputeNode.hypervisor_hostname,
-                      models.ComputeNode.vcpus).all()
+            .filter(models.ComputeNode.deleted == 0)
     else:
         sub = session.query(func.max(models.ComputeNodeStats.created_at).label(
             "cat"), models.ComputeNodeStats.compute_id)\
@@ -715,14 +712,26 @@ def get_compute_node_stats(context, use_mean=False):
             .join((sub, _and))\
             .join(models.ComputeNode,
                   models.ComputeNodeStats.compute_id == models.ComputeNode.id)\
-            .filter(models.ComputeNode.deleted == 0).all()
+            .filter(models.ComputeNode.deleted == 0)
+    if not read_suspended:
+        res = res.filter(models.ComputeNode.suspend_state != "suspend")
+    if read_suspended:
+        pass
+    if read_suspended == "only":
+        res = res.filter(models.ComputeNode.suspend_state == "suspend")
+    if use_mean:
+        res = res.group_by(models.ComputeNodeStats.compute_id,
+                           models.ComputeNodeStats.memory_total,
+                           models.ComputeNode.hypervisor_hostname,
+                           models.ComputeNode.vcpus)
+    res = res.all()
     fields = ('compute_id', 'memory_used', 'memory_total',
               'cpu_used_percent', 'hypervisor_hostname', 'vcpus')
-    response = []
+    compute_nodes = []
     for x in res:
-        response.append(dict((field, x[idx])
-                        for idx, field in enumerate(fields)))
-    return response
+        compute_nodes.append(dict((field, x[idx])
+                             for idx, field in enumerate(fields)))
+    return compute_nodes
 
 
 @require_admin_context

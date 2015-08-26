@@ -241,8 +241,9 @@ def compute_node_stats_upsert(context, values):
     return IMPL.compute_node_stats_upsert(context, values)
 
 
-def get_compute_node_stats(context, use_mean=False):
-    return IMPL.get_compute_node_stats(context, use_mean=use_mean)
+def get_compute_node_stats(context, use_mean=False, read_suspended=False):
+    return IMPL.get_compute_node_stats(context, use_mean=use_mean,
+                                       read_suspended=read_suspended)
 
 
 def get_instances_stat(context, host):
