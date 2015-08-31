@@ -51,8 +51,9 @@ class MeanUnderload(Base):
         compute_stats = utils.fill_compute_stats(instances, compute_nodes)
         host_loads = utils.calculate_host_loads(compute_nodes, compute_stats)
         for node in host_loads:
-            memory = node['hypervisor_hostname']['mem']
-            cpu = node['hypervisor_hostname']['cpu']
+            memory = host_loads[node]['mem']
+            cpu = host_loads[node]['cpu']
             if (cpu < cpu_max) and (memory < memory_max):
                 # Underload is needed.
-                pass
+                LOG.debug('underload is needed')
+                return True

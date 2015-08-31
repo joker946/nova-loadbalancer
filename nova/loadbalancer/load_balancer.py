@@ -27,7 +27,10 @@ lb_opts = [
                help='Threshold class'),
     cfg.StrOpt('balancer_class',
                default='classic',
-               help='Balancer class')
+               help='Balancer class'),
+    cfg.StrOpt('underload_class',
+               default='mean_underload',
+               help='Underload class')
 ]
 
 CONF = cfg.CONF
@@ -48,6 +51,11 @@ SUPPORTED_BALANCER_CLASSES = [
 ]
 
 
+SUPPORTED_UNDERLOAD_CLASSES = [
+    'mean_underload'
+]
+
+
 def get_balancer_class(class_name):
     if class_name in SUPPORTED_BALANCER_CLASSES:
         namespace = 'nova.loadbalancer.balancer'
@@ -64,6 +72,14 @@ def get_threshold_class(class_name):
     raise Exception('Setted up class is not supported.')
 
 
+def get_underload_class(class_name):
+    if class_name in SUPPORTED_UNDERLOAD_CLASSES:
+        namespace = 'nova.loadbalancer.underload'
+        mgr = driver.DriverManager(namespace, class_name)
+        return mgr.driver()
+    raise Exception('Setted up class is not supported.')
+
+
 class LoadBalancer(manager.Manager):
     def __init__(self, *args, **kwargs):
         super(LoadBalancer, self).__init__(service_name='loadbalancer',
@@ -72,9 +88,14 @@ class LoadBalancer(manager.Manager):
             CONF.loadbalancer.threshold_class)
         self.balancer_class = get_balancer_class(
             CONF.loadbalancer.balancer_class)
+        self.underload_class = get_underload_class(
+            CONF.loadbalancer.underload_class)
 
     def _balancer(self, context):
         make_stats()
+        underload = self.underload_class.indicate(context)
+        if underload:
+            return
         node, nodes, extra_info = self.threshold_class.indicate(context)
         if node:
             return self.balancer_class.balance(context,
