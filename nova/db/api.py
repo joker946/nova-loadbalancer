@@ -250,6 +250,10 @@ def get_instances_stat(context, host):
     return IMPL.get_instances_stat(context, host)
 
 
+def clear_compute_stats(context, date):
+    return IMPL.clear_compute_stats(context, date)
+
+
 def compute_node_delete(context, compute_id):
     """Delete a compute node from the database.
 

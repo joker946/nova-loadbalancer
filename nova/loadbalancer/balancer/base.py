@@ -31,6 +31,7 @@ lb_opts = [
                     'ImagePropertiesFilter',
                     'ServerGroupAntiAffinityFilter',
                     'ServerGroupAffinityFilter',
+                    'SuspendFilter'
                 ],
                 help='Which filter class names to use for filtering hosts '
                 'when not specified in the request.')

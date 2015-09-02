@@ -744,6 +744,14 @@ def get_instances_stat(context, host):
 
 
 @require_admin_context
+def clear_compute_stats(context, date):
+    session = get_session()
+    with session.begin():
+        session.query(models.ComputeNodeStats).filter(
+            models.ComputeNodeStats.created_at < date).delete()
+
+
+@require_admin_context
 def compute_node_delete(context, compute_id):
     """Delete a ComputeNode record."""
     session = get_session()

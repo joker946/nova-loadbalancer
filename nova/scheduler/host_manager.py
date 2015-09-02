@@ -143,6 +143,7 @@ class HostState(object):
         self.metrics = {}
 
         self.updated = None
+        self.suspend_state = None
         if compute:
             self.update_from_compute_node(compute)
 
@@ -224,6 +225,8 @@ class HostState(object):
         self.num_instances = int(self.stats.get('num_instances', 0))
 
         self.num_io_ops = int(self.stats.get('io_workload', 0))
+
+        self.suspend_state = compute.get('suspend_state')
 
         # update metrics
         self._update_metrics_from_compute_node(compute)
